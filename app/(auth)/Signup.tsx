@@ -1,5 +1,18 @@
-import { useState, useEffect } from "react"
-import { View, ScrollView, StyleSheet, TouchableOpacity, Text, KeyboardAvoidingView, Platform, TextInput, Alert } from "react-native"
+import { useState, useEffect , useRef} from "react"
+import { 
+View, 
+ScrollView, 
+StyleSheet, 
+TouchableOpacity, 
+Text, 
+KeyboardAvoidingView, 
+Platform, 
+TextInput, 
+Alert, 
+NativeSyntheticEvent, 
+TextInputKeyPressEventData,
+ActivityIndicator
+} from "react-native"
 import { SafeAreaView } from "react-native-safe-area-context"
 import { Input, Slider } from "@rneui/themed"
 import type { UserProfile } from "../../types/profile"
@@ -10,7 +23,8 @@ import axios from 'axios';
 import { SegmentedButtons } from 'react-native-paper';
 import { router } from "expo-router"
 
-const API_URL = 'http://192.168.33.238:5000/api/user-profile';
+const API_URL = 'http://192.168.87.238:5000/api/user-profile';
+const VER_URL = 'http://192.168.87.238:5000/api/verify';
 
 const sendUserProfile = async (userProfile: UserProfile) => {
   try {
@@ -28,13 +42,14 @@ const sendUserProfile = async (userProfile: UserProfile) => {
 
 const STEPS = [
   "Basic Information",
-  "Smoking History",
+  "Tobacco Consumption History",
   "Triggers",
   "Health",
   "Motivation",
   "Behavior",
   "Financial",
   "Preferences",
+  "Email Verification",
   "Password Setup",
 ]
 
@@ -45,6 +60,91 @@ export default function ProfileSetup() {
   const [confirmPassword, setConfirmPassword] = useState("")
   const [passwordStrength, setPasswordStrength] = useState(0)
   const [passwordError, setPasswordError] = useState("")
+  const [code, setCode] = useState(["", "", "", "", "", ""])
+  const inputs = useRef<(TextInput | null)[]>([])
+  const [error, setError] = useState("")
+  const [emailSent, setEmailSent] = useState(false)
+  const [loading, setLoading] = useState(false)
+
+  const handleCodeChange = (text: string, index: number) => {
+    const newCode = [...code];
+    newCode[index] = text;
+    setCode(newCode);
+  
+    // Move to next input when text is entered
+    if (text.length === 1 && index < code.length - 1) {
+      inputs.current[index + 1]?.focus();
+    }
+  };
+
+  const handleVerify = async () => {
+    setLoading(true);
+    const verificationCode = code.join('');
+    
+    if (verificationCode.length !== 6) {
+      setError('not enough digits');
+      return;
+    }
+
+    try {
+      setError('');
+
+      const response = await axios.post(VER_URL, {
+        email: profile.email,
+        otp: verificationCode
+      });
+
+      if (response.data.success) {
+        setError('Verification Successful!');
+        setLoading(false);
+        setCurrentStep((prev) => prev + 1);
+      }
+    } catch (err) {
+      if (axios.isAxiosError(err)) {
+        setError(err.response?.data?.message || 'Verification failed');
+      } else {
+        setError('Verification failed');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSendCode = async () => {
+    setLoading(true);
+    try {
+      setError('');
+
+      const response = await axios.post(VER_URL+'/send-otp', {
+        email: profile.email,
+      });
+
+      if (response.data.success) {
+        setError('OTP Sent Successfully!');
+        setEmailSent(true);
+      }
+    } catch (err) {
+      if (axios.isAxiosError(err)) {
+        setError(err.response?.data?.message || 'OTP sending failed');
+      } else {
+        setError('OTP sending failed');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleKeyPress = ({ nativeEvent }: NativeSyntheticEvent<TextInputKeyPressEventData>, index: number) => {
+    if (nativeEvent.key === 'Backspace') {
+      if (code[index] === '' && index > 0) {
+        // Delete previous input's content and focus it
+        const newCode = [...code];
+        newCode[index - 1] = '';
+        setCode(newCode);
+        inputs.current[index - 1]?.focus();
+      }
+    }
+  };
 
   const calculatePasswordStrength = (pass: string) => {
     let strength = 0
@@ -546,6 +646,66 @@ export default function ProfileSetup() {
     </>
   )
 
+  const renderEmailVerification = () => (
+    <>
+      <View style={styles.content}>
+      <Text style={styles.title}>Verification</Text>
+      {emailSent ? <Text style={styles.subtitle}>Enter the 6-digit code sent to {profile.email}</Text> : 
+        <Text style={styles.subtitle}>Click 'Send Code' to receive a verification code at {profile.email}</Text>}
+
+      {emailSent ? <View style={styles.codeContainer}>
+        {code.map((digit, index) => (
+          <TextInput
+            key={index}
+            ref={(ref) => (inputs.current[index] = ref)}
+            style={styles.codeInput}
+            value={digit}
+            onChangeText={(text) => handleCodeChange(text, index)}
+            onKeyPress={(key) => handleKeyPress(key, index)}
+            keyboardType="number-pad"
+            maxLength={1}
+          />
+        ))}
+      </View> : null }
+      {error === "not enough digits" ? <Text style={styles.errorTextVerify}>Please enter 6 digits varification code</Text> : null}
+
+      {!emailSent && (
+        <TouchableOpacity style={styles.passButton} onPress={handleSendCode} disabled={loading}>
+          {loading ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.buttonText}>Send Code</Text>}
+        </TouchableOpacity>
+      )}
+        
+
+      {emailSent && (
+        <TouchableOpacity style={styles.passButton} onPress={handleVerify} disabled={loading}>
+          {loading ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.buttonText}>Verify</Text>}
+        </TouchableOpacity>
+      )}
+
+      {emailSent && (
+        <TouchableOpacity style={styles.resendButton} onPress={handleSendCode} disabled={loading}>
+          {loading ? <ActivityIndicator size="large" color="#00ADB5" /> : <Text style={styles.resendButtonText}>Resend Code</Text>}
+        </TouchableOpacity>
+      )}
+
+      {error && (error === 'OTP Sent Successfully!' || error === 'Verification Successful!') ? (
+        <Text style={[styles.errorTextVerify, { color: '#06D6A0', fontWeight: 'bold', }]}>{error}</Text>
+      ) : (
+        <Text style={styles.errorTextVerify}>{error}</Text>
+      )}
+
+      <View style={styles.changeEmailContainer}>
+        <Text style={styles.changeEmailText}>Not your email address? </Text>
+            <TouchableOpacity 
+                onPress={() => setCurrentStep((prev) => prev - 8)}
+            >        
+        <Text style={styles.changeEmailLink}>Change email</Text>
+            </TouchableOpacity>
+      </View>
+      </View>
+    </>
+  )
+
   const renderPasswordSetup = () => (
     <>
         <View style={styles.content}>
@@ -622,6 +782,8 @@ export default function ProfileSetup() {
       case 7:
         return renderDigitalPreferences()
       case 8:
+        return renderEmailVerification()
+      case 9:
         return renderPasswordSetup()
       default:
         return null
@@ -748,7 +910,7 @@ const styles = StyleSheet.create({
     borderWidth: 0.3,
   },
   content: {
-    padding: 24,
+    padding: 10,
   },
   title: {
     fontSize: 28,
@@ -771,10 +933,11 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   input: {
-    backgroundColor: "#393E46",
+    borderColor: "#00ADB5",
+    borderWidth: 1,
     borderRadius: 8,
     padding: 16,
-    color: "#EEEEEE",
+    color: "#222831",
     fontSize: 16,
   },
   strengthContainer: {
@@ -811,6 +974,45 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginTop: -12,
     marginBottom: 12,
+  },
+  codeContainer: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    width: "100%",
+    marginBottom: 30,
+  },
+  codeInput: {
+    width: 40,
+    height: 50,
+    borderWidth: 1,
+    borderColor: "#00ADB5",
+    borderRadius: 8,
+    color: "#222831",
+    fontSize: 24,
+    textAlign: "center",
+  },
+  errorTextVerify: {
+    color: "#ff4d4d",
+    fontSize: 14,
+    marginTop: 11,
+  },
+  changeEmailContainer: {
+    flexDirection: 'row',
+    marginTop: 20,
+  },
+  changeEmailText: {
+    color: '#888',
+  },
+  changeEmailLink: {
+    color: '#00ADB5',
+    fontWeight: 'bold',
+  },
+  resendButton: {
+    marginTop: 20,
+  },
+  resendButtonText: {
+    color: "#00ADB5",
+    fontSize: 16,
   },
 })
 
